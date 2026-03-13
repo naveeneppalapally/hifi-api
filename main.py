@@ -307,32 +307,43 @@ async def search(
     isrc_query = i.strip() if isinstance(i, str) else None
     if isrc_query:
         response = None
-        try:
-            response = await make_request(
-                "https://api.tidal.com/v1/tracks",
-                params={
-                    "filter[isrc]": isrc_query,
-                    "limit": limit,
-                    "offset": offset,
-                    "countryCode": COUNTRY_CODE,
-                },
-            )
-        except HTTPException as exc:
-            # Some environments reject/disable filter[isrc] on /v1/tracks.
-            # Gracefully degrade to text search instead of failing hard.
-            if exc.status_code not in {400, 404}:
-                raise
+        track_lookup_params = (
+            {
+                "isrc": isrc_query,
+                "limit": limit,
+                "offset": offset,
+                "countryCode": COUNTRY_CODE,
+            },
+            {
+                "filter[isrc]": isrc_query,
+                "limit": limit,
+                "offset": offset,
+                "countryCode": COUNTRY_CODE,
+            },
+        )
 
-        # Fallback for environments where /tracks filter is unavailable
-        # or where the exact filter call returns no items.
-        if isinstance(response, dict):
-            payload = response.get("data")
-            if isinstance(payload, dict):
-                items = payload.get("items", [])
-                if isinstance(items, list) and len(items) > 0:
+        for params in track_lookup_params:
+            try:
+                response = await make_request(
+                    "https://api.tidal.com/v1/tracks",
+                    params=params,
+                )
+            except HTTPException as exc:
+                # Some environments reject/disable specific ISRC parameter styles.
+                # Gracefully degrade to the next attempt and finally text search.
+                if exc.status_code not in {400, 404}:
+                    raise
+                response = None
+                continue
+
+            if isinstance(response, dict):
+                payload = response.get("data")
+                if isinstance(payload, dict):
+                    items = payload.get("items", [])
+                    if isinstance(items, list) and len(items) > 0:
+                        return response
+                elif isinstance(payload, list) and len(payload) > 0:
                     return response
-            elif isinstance(payload, list) and len(payload) > 0:
-                return response
 
         return await make_request(
             "https://api.tidal.com/v1/search/tracks",
